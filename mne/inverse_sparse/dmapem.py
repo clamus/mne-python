@@ -201,7 +201,8 @@ def equilibrium_prior_cov(F, phi=0.8, sigma2w=1):
         temporal autocorrelation. This value needs to be between -1 and
         1, not inclusive. (Default is 0.8)
     sigma2w : float, optional
-        Determines the variance (power) of the sources. (Default is 1).
+        State input variance. Determines the power of the sources.
+        (Default is 1).
 
     Returns
     -------
@@ -287,7 +288,7 @@ def _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C):
 
 
 def _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
-                       compute_lik=False):
+                       compute_deviance=False):
     r"""Implements Kalman filter and stores filter and prediction
     covariance for all time points using numpy's memmap or in memory.
 
@@ -317,10 +318,10 @@ def _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
     diag_idx_p = np.diag_indices(p, ndim=2)
     diag_idx_n = np.diag_indices(n, ndim=2)
 
-    if compute_lik:
-        log_lik = - n * t * np.log(2 * np.pi) / 2
+    if compute_deviance:
+        deviance = n * t * np.log(2 * np.pi)
     else:
-        log_lik = None
+        deviance = None
 
     logger.info('Kalman Filter begins.')
     progress = ProgressBar(t - 1, spinner=True)
@@ -342,10 +343,10 @@ def _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
         R = np.dot(XV_pred, X.T)  # Covariance of innovations
         R[diag_idx_n] += 1
 
-        if compute_lik:
-            log_lik -= np.linalg.slogdet(R)[1] / 2
+        if compute_deviance:
+            deviance += np.linalg.slogdet(R)[1]
             tmp = linalg.solve(R, e_pred, sym_pos=True)
-            log_lik -= np.dot(e_pred, tmp) / 2
+            deviance += np.dot(e_pred, tmp)
 
         # Kalman correction
         G = linalg.solve(R, XV_pred, sym_pos=True).T  # Kalman gain
@@ -358,7 +359,7 @@ def _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
         V_pred.flush()
         V_filt.flush()
 
-    return Beta_filtT.T, Beta_predT.T, V_filt, V_pred, log_lik
+    return Beta_filtT.T, Beta_predT.T, V_filt, V_pred, deviance
 
 
 def _backwards_smoother(Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C,
@@ -541,6 +542,7 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
     if mem_type == 'memmap' and prefix is None:
             prefix = datetime.now().strftime('%Y-%m-%d') + '_memmap_smoother'
 
+    deviance_null = n * t * np.log(2 * np.pi) + linalg.norm(Y, ord='fro') ** 2
     converged = False
     cost = list()
     it_num = 0
@@ -549,11 +551,11 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
         it_num += 1
         logger.info('EM iteration ' + str(it_num))
         # E-step
-        Beta_filt, Beta_pred, V_filt, V_pred, log_lik = _kalman_filter_cov(
+        Beta_filt, Beta_pred, V_filt, V_pred, deviance = _kalman_filter_cov(
             X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
-            compute_lik=True)
-        log_prior = - b * np.sum(np.log(nu) + 1. / nu)
-        cost.append(log_lik + log_prior)
+            compute_deviance=True)
+        two_neg_log_prior = 2 * b * np.sum(np.log(nu) + 1. / nu)
+        cost.append(deviance + two_neg_log_prior)
         Beta_smoothed, A = _backwards_smoother(
             Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C, mem_type, prefix,
             compute_suffi=True)
@@ -563,13 +565,15 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
         print(nu.min(), nu.max())
         # Check for convergence
         if it_num > 1:
-            rel_delta_nu = linalg.norm(nu - nu_past) / linalg.norm(nu_past)
-            rel_delta_cost = np.abs(cost[-1] - cost[-2]) / np.abs(cost[-2])
-            print rel_delta_nu
-            print rel_delta_cost
-            if it_num >= maxit or min(rel_delta_nu, rel_delta_cost) < tol:
+            delta_nu = linalg.norm(nu - nu_past, ord='inf')
+            delta_cost = np.abs(cost[-1] - cost[-2])
+            print delta_nu
+            print delta_cost
+            print delta_cost / deviance_null
+            if it_num >= maxit or delta_cost < tol * deviance_null:
                 converged = True
-            # NOTE: Make one iteration after convergence for empirical Bayes
+                nu = nu_past
+                # Delete posterior covariances
 
     lh_vertno = fwd['src'][0]['vertno']
     rh_vertno = fwd['src'][1]['vertno']
