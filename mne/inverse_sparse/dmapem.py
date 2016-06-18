@@ -676,7 +676,7 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
         it_num += 1
         # Temporarily track changes in nu
         if it_num > 1:
-            delta_nu = linalg.norm(nus[-1] - nus[-2], ord='inf')
+            delta_nu = linalg.norm(nus[-1] - nus[-2], ord=np.inf)
             print delta_nu
         logger.info('EM iteration ' + str(it_num))
         # E-step
