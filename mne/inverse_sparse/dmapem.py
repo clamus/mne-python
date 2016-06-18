@@ -667,8 +667,8 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
     # iteration. This cost must be high in relation to future iterations
     deviance_null = n * t * np.log(2 * np.pi) + linalg.norm(Y, ord='fro') ** 2
     two_neg_log_prior = 2 * b * np.sum(np.log(nu) + 1. / nu)
-    cost = list(deviance_null + two_neg_log_prior)
-    nus = list(nu)
+    cost = [deviance_null + two_neg_log_prior]
+    nus = [nu]
     it_num = 0
     converged = False
     logger.info('dMAP-EM begins.')
