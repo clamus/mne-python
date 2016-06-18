@@ -7,6 +7,7 @@ maximization algorithm for source localization.
 # License: BDS (3-Clause)
 
 from datetime import datetime
+from os import remove
 
 import numpy as np
 from scipy import sparse, linalg
@@ -243,6 +244,27 @@ def equilibrium_prior_cov(F, phi=0.8, sigma2w=1):
     return C
 
 
+def _from_mne_obj_to_equations(fwd, evoked, cov, lam, nu, C, mem_type, prefix):
+    r"""Helper to get mne-python objects to the equations in the model
+
+    """
+    _, gain, cov, W, _ = _prepare_forward(fwd, evoked.info, cov)
+    Y = np.dot(W, evoked.data)
+    X = np.dot(W, gain)
+    _, t = Y.shape
+    n, p = X.shape
+    tr_Sigma = (linalg.norm(X, ord='fro')**2) / n
+
+    if nu is None:
+        nu = np.ones(p, dtype=np.float)
+    if C is None:
+        C = np.diag(nu / (lam * tr_Sigma))
+    if mem_type == 'memmap' and prefix is None:
+            prefix = datetime.now().strftime('%Y-%m-%d') + '_memmap'
+
+    return X, Y, t, n, p, tr_Sigma, nu, C, prefix
+
+
 def _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C):
     r"""Implements kalman filter without saving filter and predicted
     covariances.
@@ -360,6 +382,116 @@ def _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
         V_filt.flush()
 
     return Beta_filtT.T, Beta_predT.T, V_filt, V_pred, deviance
+
+
+def _delete_posterior_covariance(delete_cov, prefix):
+    r"""Helper to delete covariances"""
+    if delete_cov:
+        sufixes = ['-V_pred.dat', '-V_filt.dat']
+        for sufix in sufixes:
+            remove(prefix + sufix)
+
+
+@verbose
+def kalman_filter(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None,
+                  mem_type='nocov', prefix=None, delete_cov=False,
+                  verbose=None):
+    r"""The Kalman filter for source localization.
+
+    Compute the Kalman filter estimate of the sources recursively. It
+    allows for this computation without storing prediction and filter
+    covariance matrices [1].
+
+    Parameters
+    ----------
+    fwd : instance of Forward
+        The forward model. Need to be in fixed orientation.
+    evoked : instance of Evoked
+        Evoked data.
+    cov : instance of Covariance
+        Observation noise covariance.
+    phi : float, optional
+        The history parameter `phi` determines the strengh of the model
+        temporal autocorrelation. This value needs to be between -1 and
+        1, not inclusive. (Default is 0.8).
+    F : list (of scipy.sparse.csr.csr_matrix), optional
+        The transition matrix, one per hemisphere. If None, the
+        transition matrix of each hemisphere is set to the identity
+        matrix.
+    lam : float, optional
+        SNR related parameter. It can be set to the inverse of the power
+        signal-to-noise ratio in the data. (Defaults to 0.04, which
+        gives an amplitude SNR of 5).
+    nu : 1d numpy.array, optional
+        Source input variance. (Defaults to numpy.ones(n_sources)).
+    C : 2d numpy.array, optional
+        Initial state source covariance matrix. (Defaults to multiple
+        of the identity matrix).
+    mem_type : {'nocov', 'memmap', 'ram'}, optional
+        Determines whether the posterior source covariance matrices for
+        the different time points are stored. If `mem_type` is 'nocov',
+        the covariances are not stored. When `mem_type` is 'memmap', the
+        covariances are stores as a memory map binary in disk. When
+        it is set to `ram`, they are stores in memory. (Defaults to
+        'nocov').
+    prefix : string, optional
+        Prefix string to save posterior source covariance matrices as
+        binary file on disk when `mem_type` is 'memmap'.
+    delete_cov : bool, optional
+        Whether to erase posterior source covariance binary files from
+        disk when `mem_type` is 'memmap'. (Default is False)
+    verbose : bool, str, int, or None
+        If not None, override default verbose level (see mne.verbose).
+
+    Returns
+    -------
+    stc : SourceEstimate
+        Source time courses estimated from evoked data.
+    nu : 1d numpy.array of list of 1d numpy.array
+        Source input variance estimate. When `save_nu_iter` is True,
+        return the list with the estimates in all iterations.
+    cost : list (of float)
+        The cost function evaluated through the EM iterations that the
+        algorithm is maximizing.
+
+    See Also
+    --------
+    transition_matrix, equilibrium_prior_cov, dynamic_map_em
+
+    References
+    ----------
+    .. [1] Lamus, C., et al. (2012). A spatiotemporal dynamic solution
+       to the MEG inverse problem: An Empirical Bayes approach. arXiv.
+       http://arxiv.org/pdf/1511.05056v3.pdf
+
+    """
+    accepted_mem_type = ('nocov', 'memmap', 'ram')
+    if mem_type not in accepted_mem_type:
+        msg = ('Invalid mem_type ({mem_type}). Accepted values '
+               'are "%s"' % '" or "'.join(accepted_mem_type + ('None',)))
+        raise ValueError(msg)
+
+    X, Y, _, n, p, tr_Sigma, nu, C, prefix = _from_mne_obj_to_equations(
+        fwd, evoked, cov, lam, nu, C, mem_type, prefix)
+
+    if mem_type in ('memmap', 'ram'):
+        if mem_type == 'memmap' and prefix is None:
+            prefix = datetime.now().strftime('%Y-%m-%d') + '_memmap_kalman'
+        Beta, _, _, _, _ = _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma,
+                                              C, mem_type, prefix,
+                                              compute_lik=False)
+    else:
+        Beta = _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C)
+
+    _delete_posterior_covariance(delete_cov, prefix)
+
+    lh_vertno = fwd['src'][0]['vertno']
+    rh_vertno = fwd['src'][1]['vertno']
+    tmin = evoked.times[0]
+    tstep = 1.0 / evoked.info['sfreq']
+    stc = SourceEstimate(Beta, vertices=[lh_vertno, rh_vertno], tmin=tmin,
+                         tstep=tstep)
+    return stc
 
 
 def _backwards_smoother(Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C,
@@ -493,10 +625,10 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
         RAM. (Defaults to 'memmap').
     prefix : string, optional
         Prefix string to save posterior source covariance matrices as
-        binary file on disk whem `mem_type` is 'memmap'.
+        binary file on disk when `mem_type` is 'memmap'.
     delete_cov : bool, optional
         Whether to erase posterior source covariance binary files from
-        disk when whem `mem_type` is 'memmap'. (Default is False)
+        disk when `mem_type` is 'memmap'. (Default is False)
     verbose : bool, str, int, or None
         If not None, override default verbose level (see mne.verbose).
 
@@ -504,7 +636,7 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
     -------
     stc : SourceEstimate
         Source time courses estimated from evoked data.
-    nu : 1d numpy.array of list of 1d numpy.array
+    nus : 1d numpy.array of list of 1d numpy.array
         Source input variance estimate. When `save_nu_iter` is True,
         return the list with the estimates in all iterations.
     cost : list (of float)
@@ -513,7 +645,7 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
 
     See Also
     --------
-    transition_matrix, equilibrium_prior_cov
+    transition_matrix, equilibrium_prior_cov, kalman_filter
 
     References
     ----------
@@ -528,52 +660,53 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
                'are "%s"' % '" or "'.join(accepted_mem_type + ('None',)))
         raise ValueError(msg)
 
-    _, gain, cov, W, _ = _prepare_forward(fwd, evoked.info, cov)
-    Y = np.dot(W, evoked.data)
-    X = np.dot(W, gain)
-    _, t = Y.shape
-    n, p = X.shape
-    tr_Sigma = (linalg.norm(X, ord='fro')**2) / n
+    X, Y, t, n, p, tr_Sigma, nu, C, prefix = _from_mne_obj_to_equations(
+        fwd, evoked, cov, lam, nu, C, mem_type, prefix)
 
-    if nu is None:
-        nu = np.ones(p, dtype=np.float)
-    if C is None:
-        C = np.diag(nu / (lam * tr_Sigma))
-    if mem_type == 'memmap' and prefix is None:
-            prefix = datetime.now().strftime('%Y-%m-%d') + '_memmap_smoother'
-
+    # Store a base cost that to pad the convergence check in first
+    # iteration. This cost must be high in relation to future iterations
     deviance_null = n * t * np.log(2 * np.pi) + linalg.norm(Y, ord='fro') ** 2
-    converged = False
-    cost = list()
+    two_neg_log_prior = 2 * b * np.sum(np.log(nu) + 1. / nu)
+    cost = list(deviance_null + two_neg_log_prior)
+    nus = list(nu)
     it_num = 0
+    converged = False
     logger.info('dMAP-EM begins.')
     while not converged:
         it_num += 1
+        # Temporarily track changes in nu
+        if it_num > 1:
+            delta_nu = linalg.norm(nus[-1] - nus[-2], ord='inf')
+            print delta_nu
         logger.info('EM iteration ' + str(it_num))
         # E-step
         Beta_filt, Beta_pred, V_filt, V_pred, deviance = _kalman_filter_cov(
-            X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
+            X, Y, phi, F, lam, nus[-1], tr_Sigma, C, mem_type, prefix,
             compute_deviance=True)
-        two_neg_log_prior = 2 * b * np.sum(np.log(nu) + 1. / nu)
-        cost.append(deviance + two_neg_log_prior)
         Beta_smoothed, A = _backwards_smoother(
             Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C, mem_type, prefix,
             compute_suffi=True)
-        # M-step
-        nu_past = nu
-        nu = (lam * tr_Sigma / (1 - phi**2) * np.diag(A) + 2 * b) / (t + 2 * b)
-        print(nu.min(), nu.max())
+        # Evaluate cost (deviance - 2 * log_prior)
+        two_neg_log_prior = 2 * b * np.sum(np.log(nus[-1]) + 1. / nus[-1])
+        cost.append(deviance + two_neg_log_prior)
         # Check for convergence
-        if it_num > 1:
-            delta_nu = linalg.norm(nu - nu_past, ord='inf')
-            delta_cost = np.abs(cost[-1] - cost[-2])
-            print delta_nu
-            print delta_cost
-            print delta_cost / deviance_null
-            if it_num >= maxit or delta_cost < tol * deviance_null:
-                converged = True
-                nu = nu_past
-                # Delete posterior covariances
+        delta_cost = np.abs(cost[-1] - cost[-2])
+        print delta_cost
+        print delta_cost / deviance_null
+        if it_num >= maxit or delta_cost < tol * deviance_null:
+            converged = True
+        else:
+            # M-step
+            a = np.diag(A)
+            nu_new = (lam * tr_Sigma / (1 - phi**2) * a + 2 * b) / (t + 2 * b)
+            nus.append(nu_new)
+
+    if not save_nu_iter:
+        nus = nus[-1]
+    # Remove cost[0], which is not a real cost but just a number for padding
+    cost.pop(0)
+
+    _delete_posterior_covariance(delete_cov, prefix)
 
     lh_vertno = fwd['src'][0]['vertno']
     rh_vertno = fwd['src'][1]['vertno']
@@ -581,4 +714,4 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
     tstep = 1.0 / evoked.info['sfreq']
     stc = SourceEstimate(Beta_smoothed, vertices=[lh_vertno, rh_vertno],
                          tmin=tmin, tstep=tstep)
-    return stc, nu, cost
+    return stc, nus, cost
