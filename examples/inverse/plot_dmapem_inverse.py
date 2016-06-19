@@ -69,7 +69,7 @@ F = None
 # Compute dmapem inverse solution
 stc, nus, cost = dynamic_map_em(fwd, evoked, cov, phi=phi, F=F, lam=lam,
                                 nu=None, C=None, b=b, save_nu_iter=True,
-                                tol=1e-5, mait=maxit, mem_type=mem_type,
+                                tol=1e-5, maxit=maxit, mem_type=mem_type,
                                 prefix=None, delete_cov=True, verbose=None)
 
 
