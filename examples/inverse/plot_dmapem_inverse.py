@@ -59,7 +59,7 @@ lam = 1. / SNR**2   # Regularization related to power SNR
 b = 3   # Parameter for inv gamma hyper prior, to make it non (little) inform
 phi = 0.8   # Temporal autocorrelation of lag 1
 maxit = 20
-mem_type = 'ram'
+mem_type = 'memmap'
 
 F_hemis = transition_matrix(fwd['src'], alpha=0.5, dist_weight=False)
 F = linalg.block_diag(F_hemis[0].todense(), F_hemis[1].todense())
