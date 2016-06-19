@@ -244,7 +244,7 @@ def equilibrium_prior_cov(F, phi=0.8, sigma2w=1):
     return C
 
 
-def _from_mne_obj_to_equations(fwd, evoked, cov, lam, nu, C, mem_type, prefix):
+def _from_mne_to_equations(fwd, evoked, cov, F, lam, nu, C, mem_type, prefix):
     r"""Helper to get mne-python objects to the equations in the model
 
     """
@@ -255,6 +255,8 @@ def _from_mne_obj_to_equations(fwd, evoked, cov, lam, nu, C, mem_type, prefix):
     n, p = X.shape
     tr_Sigma = (linalg.norm(X, ord='fro')**2) / n
 
+    if F is None:
+        F = np.eye(p, dtype=np.float)
     if nu is None:
         nu = np.ones(p, dtype=np.float)
     if C is None:
@@ -262,7 +264,7 @@ def _from_mne_obj_to_equations(fwd, evoked, cov, lam, nu, C, mem_type, prefix):
     if mem_type == 'memmap' and prefix is None:
             prefix = datetime.now().strftime('%Y-%m-%d') + '_memmap'
 
-    return X, Y, t, n, p, tr_Sigma, nu, C, prefix
+    return X, Y, t, n, p, F, tr_Sigma, nu, C, prefix
 
 
 def _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C):
@@ -393,7 +395,7 @@ def _delete_posterior_covariance(delete_cov, prefix):
 
 
 @verbose
-def kalman_filter(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None,
+def kalman_filter(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None, C=None,
                   mem_type='nocov', prefix=None, delete_cov=False,
                   verbose=None):
     r"""The Kalman filter for source localization.
@@ -414,9 +416,8 @@ def kalman_filter(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None,
         The history parameter `phi` determines the strengh of the model
         temporal autocorrelation. This value needs to be between -1 and
         1, not inclusive. (Default is 0.8).
-    F : list (of scipy.sparse.csr.csr_matrix), optional
-        The transition matrix, one per hemisphere. If None, the
-        transition matrix of each hemisphere is set to the identity
+    F : numpy.array 2d, optional
+        The transition matrix. If None, it is set to the identity
         matrix.
     lam : float, optional
         SNR related parameter. It can be set to the inverse of the power
@@ -471,8 +472,8 @@ def kalman_filter(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None,
                'are "%s"' % '" or "'.join(accepted_mem_type + ('None',)))
         raise ValueError(msg)
 
-    X, Y, _, n, p, tr_Sigma, nu, C, prefix = _from_mne_obj_to_equations(
-        fwd, evoked, cov, lam, nu, C, mem_type, prefix)
+    X, Y, t, n, p, F, tr_Sigma, nu, C, prefix = _from_mne_to_equations(
+        fwd, evoked, cov, F, lam, nu, C, mem_type, prefix)
 
     if mem_type in ('memmap', 'ram'):
         if mem_type == 'memmap' and prefix is None:
@@ -574,9 +575,10 @@ def _backwards_smoother(Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C,
 
 
 @verbose
-def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
-                   save_nu_iter=False, tol=1e-5, maxit=20, mem_type='memmap',
-                   prefix=None, delete_cov=False, verbose=None):
+def dynamic_map_em(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None,
+                   C=None, b=3, save_nu_iter=False, tol=1e-5, maxit=20,
+                   mem_type='memmap', prefix=None, delete_cov=False,
+                   verbose=None):
     r"""The Dynamic Maximum a Posteriori Expectation-Maximization
     algorithm for source localization algorithm.
 
@@ -596,9 +598,8 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
         The history parameter `phi` determines the strengh of the model
         temporal autocorrelation. This value needs to be between -1 and
         1, not inclusive. (Default is 0.8).
-    F : list (of scipy.sparse.csr.csr_matrix), optional
-        The transition matrix, one per hemisphere. If None, the
-        transition matrix of each hemisphere is set to the identity
+    F : numpy.array 2d, optional
+        The transition matrix. If None, it is set to the identity
         matrix.
     lam : float, optional
         SNR related parameter. It can be set to the inverse of the power
@@ -660,12 +661,12 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
                'are "%s"' % '" or "'.join(accepted_mem_type + ('None',)))
         raise ValueError(msg)
 
-    X, Y, t, n, p, tr_Sigma, nu, C, prefix = _from_mne_obj_to_equations(
-        fwd, evoked, cov, lam, nu, C, mem_type, prefix)
+    X, Y, t, n, p, F, tr_Sigma, nu, C, prefix = _from_mne_to_equations(
+        fwd, evoked, cov, F, lam, nu, C, mem_type, prefix)
 
     # Store a base cost that to pad the convergence check in first
     # iteration. This cost must be high in relation to future iterations
-    deviance_null = n * t * np.log(2 * np.pi) + linalg.norm(Y, ord='fro') ** 2
+    deviance_null = n * t * np.log(2 * np.pi) + linalg.norm(Y, ord='fro')**2
     two_neg_log_prior = 2 * b * np.sum(np.log(nu) + 1. / nu)
     cost = [deviance_null + two_neg_log_prior]
     nus = [nu]
@@ -674,12 +675,12 @@ def dynamic_map_em(fwd, evoked, cov, phi, F, lam=0.04, nu=None, C=None, b=3,
     logger.info('dMAP-EM begins.')
     while not converged:
         it_num += 1
+        logger.info('EM iteration ' + str(it_num))
+        # E-step
         # Temporarily track changes in nu
         if it_num > 1:
             delta_nu = linalg.norm(nus[-1] - nus[-2], ord=np.inf)
             print delta_nu
-        logger.info('EM iteration ' + str(it_num))
-        # E-step
         Beta_filt, Beta_pred, V_filt, V_pred, deviance = _kalman_filter_cov(
             X, Y, phi, F, lam, nus[-1], tr_Sigma, C, mem_type, prefix,
             compute_deviance=True)
