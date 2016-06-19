@@ -58,8 +58,8 @@ SNR = 5
 lam = 1. / SNR**2   # Regularization related to power SNR
 b = 3   # Parameter for inv gamma hyper prior, to make it non (little) inform
 phi = 0.8   # Temporal autocorrelation of lag 1
-maxit = 20
-mem_type = 'memmap'
+maxit = 100
+mem_type = 'ram'
 
 # F_hemis = transition_matrix(fwd['src'], alpha=0.5, dist_weight=False)
 # F = linalg.block_diag(F_hemis[0].todense(), F_hemis[1].todense())
@@ -69,7 +69,7 @@ F = None
 # Compute dmapem inverse solution
 stc, nus, cost = dynamic_map_em(fwd, evoked, cov, phi=phi, F=F, lam=lam,
                                 nu=None, C=None, b=b, save_nu_iter=True,
-                                tol=1e-5, maxit=maxit, mem_type=mem_type,
+                                tol=1e-7, maxit=maxit, mem_type=mem_type,
                                 prefix=None, delete_cov=True, verbose=None)
 
 
