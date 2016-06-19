@@ -14,7 +14,7 @@ from scipy import sparse, linalg
 
 from sklearn.preprocessing import normalize
 
-from ..minimum_norm.inverse import _prepare_forward
+from ..minimum_norm.inverse import _prepare_forward, _check_reference
 from ..source_estimate import SourceEstimate
 from ..source_space import SourceSpaces
 from ..utils import logger, verbose, ProgressBar
@@ -248,8 +248,12 @@ def _from_mne_to_equations(fwd, evoked, cov, F, lam, nu, C, mem_type, prefix):
     r"""Helper to get mne-python objects to the equations in the model
 
     """
-    _, gain, cov, W, _ = _prepare_forward(fwd, evoked.info, cov)
-    Y = np.dot(W, evoked.data)
+    gain_info, gain, cov, W, _ = _prepare_forward(fwd, evoked.info, cov)
+
+    _check_reference(evoked)
+    all_ch_names = evoked.ch_names
+    sel = [all_ch_names.index(name) for name in gain_info['ch_names']]
+    Y = np.dot(W, evoked.data[sel])
     X = np.dot(W, gain)
     _, t = Y.shape
     n, p = X.shape
