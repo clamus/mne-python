@@ -47,8 +47,7 @@ condition = 'Left Auditory'
 evoked = mne.read_evokeds(ave_fname, condition=condition, baseline=(None, 0))
 evoked.crop(tmin=0, tmax=0.3)
 # Handling forward solution
-fwd = mne.read_forward_solution(fwd_fname, surf_ori=True,
-                                force_force_fixed=True)
+fwd = mne.read_forward_solution(fwd_fname, surf_ori=True, force_fixed=True)
 
 ylim = dict(eeg=[-10, 10], grad=[-400, 400], mag=[-600, 600])
 evoked.plot(ylim=ylim, proj=True)
