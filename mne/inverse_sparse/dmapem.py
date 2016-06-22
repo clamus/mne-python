@@ -396,10 +396,9 @@ def _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
 
 def _delete_posterior_covariance(delete_cov, prefix):
     r"""Helper to delete covariances"""
-    if delete_cov:
-        sufixes = ['-V_pred.dat', '-V_filt.dat']
-        for sufix in sufixes:
-            remove(prefix + sufix)
+    sufixes = ['-V_pred.dat', '-V_filt.dat']
+    for sufix in sufixes:
+        remove(prefix + sufix)
 
 
 @verbose
@@ -496,7 +495,8 @@ def kalman_filter(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None, C=None,
         Beta = _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C,
                               show_progress=show_progress)
 
-    _delete_posterior_covariance(delete_cov, prefix)
+    if delete_cov and mem_type == 'memmap':
+        _delete_posterior_covariance(delete_cov, prefix)
 
     lh_vertno = fwd['src'][0]['vertno']
     rh_vertno = fwd['src'][1]['vertno']
@@ -726,7 +726,8 @@ def dynamic_map_em(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None,
     # Remove cost[0], which is not a real cost but just a number for padding
     cost.pop(0)
 
-    _delete_posterior_covariance(delete_cov, prefix)
+    if delete_cov and mem_type == 'memmap':
+        _delete_posterior_covariance(delete_cov, prefix)
 
     lh_vertno = fwd['src'][0]['vertno']
     rh_vertno = fwd['src'][1]['vertno']
