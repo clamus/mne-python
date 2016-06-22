@@ -621,7 +621,9 @@ def dynamic_map_em(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None,
         Whether to return the source inpute variance vector (`nu`) from
         all EM iterations. (Defaults to False).
     tol : float, optional
-        Tolerance parameter. (Default is 1e-5)
+        Tolerance parameter. The EM iterations stop when the improvement
+        between interations is less that `tol` time the deviance of the
+        null model. (Default is 1e-5)
     maxit : int, optional
         Maximum number of iterations. (Defaults to 20)
     mem_type : {'memmap', 'ram'}, optional
@@ -668,8 +670,8 @@ def dynamic_map_em(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None,
     X, Y, t, n, p, F, tr_Sigma, nu, C, prefix = _from_mne_to_equations(
         fwd, evoked, cov, F, lam, nu, C, mem_type, prefix)
 
-    # Store a base cost that to pad the convergence check in first
-    # iteration. This cost must be high in relation to future iterations
+    # Compute a base cost (deviance of null model), which is used in the
+    # convergence check. This cost must be high in relation future iters
     deviance_null = n * t * np.log(2 * np.pi) + linalg.norm(Y, ord='fro')**2
     two_neg_log_prior = 2 * b * np.sum(np.log(nu) + 1. / nu)
     cost = [deviance_null + two_neg_log_prior]
