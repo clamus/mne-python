@@ -271,7 +271,7 @@ def _from_mne_to_equations(fwd, evoked, cov, F, lam, nu, C, mem_type, prefix):
     return X, Y, t, n, p, F, tr_Sigma, nu, C, prefix
 
 
-def _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C):
+def _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C, show_progress=False):
     r"""Implements kalman filter without saving filter and predicted
     covariances.
 
@@ -291,10 +291,12 @@ def _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C):
     diag_idx_n = np.diag_indices(n, ndim=2)
 
     logger.info('Kalman Filter begins.')
-    progress = ProgressBar(t - 1, spinner=True)
+    if show_progress:
+        progress = ProgressBar(t - 1, spinner=True)
     for row, y in enumerate(Y.T):
         # Kalman prediction
-        progress.update(row)
+        if show_progress:
+            progress.update(row)
         beta_pred = np.dot(beta_filt, phiFT)
         V_pred = np.dot(phiFT.T, np.dot(V_filt, phiFT))
         V_pred[diag_idx_p] += sigma2_input
@@ -316,7 +318,7 @@ def _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C):
 
 
 def _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
-                       compute_deviance=False):
+                       compute_deviance=False, show_progress=False):
     r"""Implements Kalman filter and stores filter and prediction
     covariance for all time points using numpy's memmap or in memory.
 
@@ -352,10 +354,12 @@ def _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma, C, mem_type, prefix,
         deviance = None
 
     logger.info('Kalman Filter begins.')
-    progress = ProgressBar(t - 1, spinner=True)
+    if show_progress:
+        progress = ProgressBar(t - 1, spinner=True)
     for row, y in enumerate(Y.T):
         # Kalman prediction
-        progress.update(row)
+        if show_progress:
+            progress.update(row)
         if row == 0:
             Beta_predT[row] = np.dot(beta_filt_ini, phiFT)
             V_pred[row] = np.dot(phiFT.T, np.dot(V_filt_ini, phiFT))
@@ -401,7 +405,7 @@ def _delete_posterior_covariance(delete_cov, prefix):
 @verbose
 def kalman_filter(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None, C=None,
                   mem_type='nocov', prefix=None, delete_cov=False,
-                  verbose=None):
+                  show_progress=False, verbose=None):
     r"""The Kalman filter for source localization.
 
     Compute the Kalman filter estimate of the sources recursively. It
@@ -445,6 +449,8 @@ def kalman_filter(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None, C=None,
     delete_cov : bool, optional
         Whether to erase posterior source covariance binary files from
         disk when `mem_type` is 'memmap'. (Default is False)
+    show_progress : bool, optional
+        Whether to show progress bar in computation. (Default is True)
     verbose : bool, str, int, or None
         If not None, override default verbose level (see mne.verbose).
 
@@ -484,9 +490,11 @@ def kalman_filter(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None, C=None,
             prefix = datetime.now().strftime('%Y-%m-%d') + '_memmap_kalman'
         Beta, _, _, _, _ = _kalman_filter_cov(X, Y, phi, F, lam, nu, tr_Sigma,
                                               C, mem_type, prefix,
-                                              compute_lik=False)
+                                              compute_lik=False,
+                                              show_progress=show_progress)
     else:
-        Beta = _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C)
+        Beta = _kalman_filter(X, Y, phi, F, lam, nu, tr_Sigma, C,
+                              show_progress=show_progress)
 
     _delete_posterior_covariance(delete_cov, prefix)
 
@@ -500,7 +508,8 @@ def kalman_filter(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None, C=None,
 
 
 def _backwards_smoother(Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C,
-                        mem_type, prefix, compute_suffi=False):
+                        mem_type, prefix, compute_suffi=False,
+                        show_progress=False):
     r"""Implements backwards smoother recursions
 
     """
@@ -528,9 +537,11 @@ def _backwards_smoother(Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C,
     Beta_smoothedT[t - 1] = Beta_filtT[t - 1].copy()
 
     logger.info('Backwards Smoother begins.')
-    progress = ProgressBar(t - 2, spinner=True)
+    if show_progress:
+        progress = ProgressBar(t - 2, spinner=True)
     for idx in range(t - 2, -1, -1):
-        progress.update(idx)
+        if show_progress:
+            progress.update(idx)
         idx_plus = idx + 1
         phiFV_filt = np.dot(phiF, V_filt[idx])
         JT = linalg.solve(V_pred[idx_plus], phiFV_filt, sym_pos=True)
@@ -582,7 +593,7 @@ def _backwards_smoother(Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C,
 def dynamic_map_em(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None,
                    C=None, b=3, save_nu_iter=False, tol=1e-5, maxit=20,
                    mem_type='memmap', prefix=None, delete_cov=False,
-                   verbose=None):
+                   show_progress=True, verbose=None):
     r"""The Dynamic Maximum a Posteriori Expectation-Maximization
     algorithm for source localization algorithm.
 
@@ -636,6 +647,8 @@ def dynamic_map_em(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None,
     delete_cov : bool, optional
         Whether to erase posterior source covariance binary files from
         disk when `mem_type` is 'memmap'. (Default is False)
+    show_progress : bool, optional
+        Whether to show progress bar in computation. (Default is True)
     verbose : bool, str, int, or None
         If not None, override default verbose level (see mne.verbose).
 
@@ -689,10 +702,10 @@ def dynamic_map_em(fwd, evoked, cov, phi=0.8, F=None, lam=0.04, nu=None,
             print delta_nu
         Beta_filt, Beta_pred, V_filt, V_pred, deviance = _kalman_filter_cov(
             X, Y, phi, F, lam, nus[-1], tr_Sigma, C, mem_type, prefix,
-            compute_deviance=True)
+            compute_deviance=True, show_progress=show_progress)
         Beta_smoothed, A = _backwards_smoother(
             Beta_filt, Beta_pred, V_filt, V_pred, phi, F, C, mem_type, prefix,
-            compute_suffi=True)
+            compute_suffi=True, show_progress=show_progress)
         # Evaluate cost (deviance - 2 * log_prior)
         two_neg_log_prior = 2 * b * np.sum(np.log(nus[-1]) + 1. / nus[-1])
         cost.append(deviance + two_neg_log_prior)
